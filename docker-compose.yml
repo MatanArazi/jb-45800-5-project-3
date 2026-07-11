@@ -1,0 +1,55 @@
+# Docker Compose Configuration for Vacation Website Project
+# This file orchestrates all services needed for the application
+
+version: '3.8'
+
+services:
+  # MySQL Database Service
+  mysql:
+    # Use official MySQL image, version 8.0
+    image: mysql:8.0
+    
+    # Name for the container
+    container_name: vacation_db
+    
+    # Environment variables for MySQL setup
+    environment:
+      # Root password - change this in production!
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      # Database name that will be created automatically
+      MYSQL_DATABASE: ${DB_NAME:-vacation_db}
+      # User for the database
+      MYSQL_USER: ${DB_USER:-vacation_user}
+      # User password
+      MYSQL_PASSWORD: ${DB_PASSWORD:-userpassword}
+    
+    # Port mapping: HOST:CONTAINER (3306 is MySQL default port)
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    
+    # Volume mounts for persistent data
+    volumes:
+      # MySQL data persistence - data survives container restarts
+      - mysql_data:/var/lib/mysql
+      # Initialize database with our SQL schema file
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    
+    # Health check to verify MySQL is ready
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      interval: 10s
+    
+    # Restart policy
+    restart: unless-stopped
+
+# Named volumes - persists data on your computer
+volumes:
+  mysql_data:
+    driver: local
+
+# Custom network for inter-container communication
+networks:
+  default:
+    name: vacation_network
