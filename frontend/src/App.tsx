@@ -34,6 +34,31 @@ interface CreateUserResponse {
   error?: string;
 }
 
+type AppView = 'home' | 'ai' | 'mcp' | 'create' | 'report';
+
+interface AiResponse {
+  success: boolean;
+  recommendation?: string;
+  error?: string;
+}
+
+interface McpResponse {
+  success: boolean;
+  answer?: string;
+  error?: string;
+}
+
+interface ReportRow {
+  destination: string;
+  likes: number;
+}
+
+interface ReportResponse {
+  success: boolean;
+  data: ReportRow[];
+  error?: string;
+}
+
 function App() {
   const [vacations, setVacations] = useState<Vacation[]>([]);
   const [page, setPage] = useState<number>(1);
@@ -55,6 +80,16 @@ function App() {
   const [newPrice, setNewPrice] = useState<string>('');
   const [newImageFile, setNewImageFile] = useState<File | null>(null);
 
+  // Admin edit form
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState<string>('');
+  const [editDescription, setEditDescription] = useState<string>('');
+  const [editDestination, setEditDestination] = useState<string>('');
+  const [editStart, setEditStart] = useState<string>('');
+  const [editEnd, setEditEnd] = useState<string>('');
+  const [editPrice, setEditPrice] = useState<string>('');
+  const [editImageFile, setEditImageFile] = useState<File | null>(null);
+
   // Authentication / current user
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     try {
@@ -72,6 +107,22 @@ function App() {
   const [signupFirst, setSignupFirst] = useState<string>('');
   const [signupLast, setSignupLast] = useState<string>('');
   const [showSignupPopup, setShowSignupPopup] = useState<boolean>(false);
+  const [view, setView] = useState<AppView>('home');
+
+  // AI page state
+  const [aiDestination, setAiDestination] = useState<string>('');
+  const [aiResult, setAiResult] = useState<string>('');
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  // MCP page state
+  const [mcpQuestion, setMcpQuestion] = useState<string>('');
+  const [mcpResult, setMcpResult] = useState<string>('');
+  const [mcpLoading, setMcpLoading] = useState<boolean>(false);
+  const [mcpError, setMcpError] = useState<string | null>(null);
+  const [reportRows, setReportRows] = useState<ReportRow[]>([]);
+  const [reportLoading, setReportLoading] = useState<boolean>(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const isAdmin = currentUser?.role === 'admin';
 
@@ -84,6 +135,13 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser, page, filter]);
+
+  useEffect(() => {
+    if (currentUser && view === 'report') {
+      fetchVacationReport();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, view]);
 
   const fetchImageAsDataUrl = async (url: string): Promise<string> => {
     const res = await fetch(url);
@@ -109,7 +167,8 @@ function App() {
 
       const withImages = await Promise.all(
         items.map(async (v) => {
-          const key = `vacation_image_${v.vacation_id}`;
+          const imageVersion = encodeURIComponent(v.image_url || 'no-image');
+          const key = `vacation_image_${v.vacation_id}_${imageVersion}`;
           try {
             const cached = localStorage.getItem(key);
             if (cached) return { ...v, displayImage: cached };
@@ -129,6 +188,12 @@ function App() {
       );
 
       setVacations(withImages);
+      const likedSet = new Set(
+        withImages
+          .filter((v) => Number(v.liked_by_current_user || 0) > 0)
+          .map((v) => v.vacation_id)
+      );
+      setUserLikes(likedSet);
       setError(null);
     } catch (err) {
       console.error('Error fetching vacations:', err);
@@ -200,13 +265,34 @@ function App() {
   const handleCreateVacation = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     try {
+      if (!newTitle || !newDescription || !newDestination || !newStart || !newEnd || !newPrice || !newImageFile) {
+        alert('All fields are required, including image');
+        return;
+      }
+
+      const today = new Date().toISOString().split('T')[0];
+      if (newStart < today) {
+        alert('Start date cannot be in the past');
+        return;
+      }
+      if (newEnd < newStart) {
+        alert('End date must be after start date');
+        return;
+      }
+
+      const numericPrice = Number(newPrice);
+      if (!Number.isFinite(numericPrice) || numericPrice < 0 || numericPrice > 10000) {
+        alert('Price must be between 0 and 10000');
+        return;
+      }
+
       const form = new FormData();
       form.append('title', newTitle);
       form.append('description', newDescription);
       form.append('destination', newDestination);
       form.append('start_date', newStart);
       form.append('end_date', newEnd);
-      form.append('price', newPrice);
+      form.append('price', String(numericPrice));
       form.append('created_by', String(currentUser?.user_id ?? 1));
       if (newImageFile) form.append('image', newImageFile);
 
@@ -220,6 +306,7 @@ function App() {
       setNewTitle(''); setNewDescription(''); setNewDestination('');
       setNewStart(''); setNewEnd(''); setNewPrice(''); setNewImageFile(null);
       setShowAdminCreate(false);
+      setView('home');
       fetchVacations(page, filter);
       fetchStats();
     } catch (err) {
@@ -227,6 +314,111 @@ function App() {
       alert('Failed to create vacation');
     }
   };
+
+  const getTodayString = (): string => {
+    return new Date().toISOString().split('T')[0];
+  };
+
+  const startEditVacation = (vacation: Vacation): void => {
+    setView('create');
+    setEditingId(vacation.vacation_id);
+    setEditTitle(vacation.title);
+    setEditDescription(vacation.description);
+    setEditDestination(vacation.destination);
+    setEditStart(vacation.start_date.split('T')[0]);
+    setEditEnd(vacation.end_date.split('T')[0]);
+    setEditPrice(String(vacation.price));
+    setEditImageFile(null);
+    setShowAdminCreate(false);
+  };
+
+  const fetchVacationReport = async (): Promise<void> => {
+    try {
+      setReportLoading(true);
+      setReportError(null);
+      const res = await axios.get<ReportResponse>(`${API_BASE}/reports/vacation-likes`);
+      setReportRows((res.data?.data || []).map((r) => ({ destination: r.destination, likes: Number(r.likes || 0) })));
+    } catch (err: any) {
+      setReportError(err?.response?.data?.error || 'Failed to load report');
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const downloadReportCsv = async (): Promise<void> => {
+    try {
+      const res = await axios.get<Blob>(`${API_BASE}/reports/vacation-likes.csv`, { responseType: 'blob' });
+      const blob = new Blob([res.data as BlobPart], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'vacation-likes-report.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Failed to download CSV');
+    }
+  };
+
+  const handleUpdateVacation = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (!editingId) return;
+
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      if (editStart < today) {
+        alert('Start date cannot be in the past');
+        return;
+      }
+      if (editEnd < editStart) {
+        alert('End date must be after start date');
+        return;
+      }
+
+      const form = new FormData();
+      form.append('title', editTitle);
+      form.append('description', editDescription);
+      form.append('destination', editDestination);
+      form.append('start_date', editStart);
+      form.append('end_date', editEnd);
+      form.append('price', editPrice);
+      if (editImageFile) form.append('image', editImageFile);
+
+      await axios.put(`${API_BASE}/vacations/${editingId}`, form, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          ...(currentUser?.user_id ? { 'x-user-id': String(currentUser.user_id) } : {}),
+        },
+      });
+
+      setEditingId(null);
+      fetchVacations(page, filter);
+      fetchStats();
+      alert('Vacation updated successfully!');
+    } catch (err) {
+      console.error('Update vacation failed:', err);
+      alert('Failed to update vacation');
+    }
+  };
+
+  const handleDeleteVacation = async (vacationId: number): Promise<void> => {
+    if (!window.confirm('Are you sure you want to delete this vacation?')) return;
+
+    try {
+      await axios.delete(`${API_BASE}/vacations/${vacationId}`, {
+        headers: currentUser?.user_id ? { 'x-user-id': String(currentUser.user_id) } : {},
+      });
+
+      fetchVacations(page, filter);
+      fetchStats();
+      alert('Vacation deleted successfully!');
+    } catch (err) {
+      console.error('Delete vacation failed:', err);
+      alert('Failed to delete vacation');
+    }
+  }
 
   const handleLogin = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -278,6 +470,57 @@ function App() {
     setCurrentUser(null);
     try { localStorage.removeItem('currentUser'); } catch {}
     setVacations([]);
+    setView('home');
+  };
+
+  const askAiRecommendation = async (): Promise<void> => {
+    if (!aiDestination.trim()) {
+      setAiError('Please enter a destination first.');
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError(null);
+    setAiResult('');
+    try {
+      const res = await axios.post<AiResponse>(`${API_BASE}/ai/recommendation`, {
+        destination: aiDestination,
+      });
+      if (!res.data.success) {
+        setAiError(res.data.error || 'Failed to fetch AI recommendation');
+        return;
+      }
+      setAiResult(res.data.recommendation || 'No recommendation returned.');
+    } catch (err: any) {
+      setAiError(err?.response?.data?.error || 'Failed to fetch AI recommendation');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const askMcpQuestion = async (): Promise<void> => {
+    if (!mcpQuestion.trim()) {
+      setMcpError('Please enter a question first.');
+      return;
+    }
+
+    setMcpLoading(true);
+    setMcpError(null);
+    setMcpResult('');
+    try {
+      const res = await axios.post<McpResponse>(`${API_BASE}/mcp/query`, {
+        question: mcpQuestion,
+      });
+      if (!res.data.success) {
+        setMcpError(res.data.error || 'Failed to query MCP server');
+        return;
+      }
+      setMcpResult(res.data.answer || 'No answer returned.');
+    } catch (err: any) {
+      setMcpError(err?.response?.data?.error || 'Failed to query MCP server');
+    } finally {
+      setMcpLoading(false);
+    }
   };
 
   if (!currentUser) {
@@ -345,34 +588,65 @@ function App() {
         </div>
       </header>
 
-      {/* Admin create vacation form */}
-      {isAdmin && (
-        <div style={{ padding: '8px 16px' }}>
-          <button onClick={() => setShowAdminCreate((s) => !s)} style={{ marginBottom: 8 }}>
-            Admin: Create Vacation
-          </button>
-          {showAdminCreate && (
-            <form onSubmit={handleCreateVacation} className="admin-create-form">
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <input placeholder="Title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} required />
-                <input placeholder="Destination" value={newDestination} onChange={(e) => setNewDestination(e.target.value)} required />
-                <input placeholder="Start date (YYYY-MM-DD)" value={newStart} onChange={(e) => setNewStart(e.target.value)} required />
-                <input placeholder="End date (YYYY-MM-DD)" value={newEnd} onChange={(e) => setNewEnd(e.target.value)} required />
-                <input placeholder="Price" value={newPrice} onChange={(e) => setNewPrice(e.target.value)} required />
-                <input placeholder="Description" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} />
-                <input type="file" accept="image/*" onChange={(e) => setNewImageFile(e.target.files?.[0] ?? null)} />
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <button type="submit">Create Vacation</button>
-                <button type="button" onClick={() => setShowAdminCreate(false)} style={{ marginLeft: 8 }}>Cancel</button>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
+      <div className="top-nav-shell">
+        <nav className="top-nav" aria-label="Main navigation">
+          <div className="top-nav-left">
+            <button
+              className={`nav-pill ${view === 'home' && filter === 'all' ? 'active-filter' : ''}`}
+              onClick={() => { setView('home'); changeFilter('all'); }}
+            >
+              Home
+            </button>
+            {(['all', 'liked', 'active', 'future'] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => { setView('home'); changeFilter(f); }}
+                className={`nav-pill ${view === 'home' && filter === f ? 'active-filter' : ''}`}
+              >
+                {f.charAt(0).toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+
+          <div className="top-nav-right">
+            {isAdmin && (
+              <>
+                <button
+                  className={`nav-pill nav-pill-tool ${view === 'create' ? 'active-filter' : ''}`}
+                  onClick={() => {
+                    setView('create');
+                    setShowAdminCreate(true);
+                    setEditingId(null);
+                  }}
+                >
+                  Add Vacation
+                </button>
+                <button
+                  className={`nav-pill nav-pill-tool ${view === 'report' ? 'active-filter' : ''}`}
+                  onClick={() => setView('report')}
+                >
+                  Vacation Report
+                </button>
+              </>
+            )}
+            <button
+              className={`nav-pill nav-pill-tool ${view === 'ai' ? 'active-filter' : ''}`}
+              onClick={() => setView('ai')}
+            >
+              AI reccomendations
+            </button>
+            <button
+              className={`nav-pill nav-pill-tool ${view === 'mcp' ? 'active-filter' : ''}`}
+              onClick={() => setView('mcp')}
+            >
+              Any questions? click here
+            </button>
+          </div>
+        </nav>
+      </div>
 
       {/* Stats Dashboard */}
-      {stats && (
+      {view === 'home' && stats && (
         <section className="stats-section">
           <div className="stats-grid">
             <div className="stat-card"><h3>{stats.vacations}</h3><p>Vacations</p></div>
@@ -384,7 +658,7 @@ function App() {
       )}
 
       <main className="main-content">
-        {error && (
+        {view === 'home' && error && (
           <div className="error-banner">
             <p>⚠️ {error}</p>
             <p style={{ fontSize: '14px', marginTop: '10px' }}>
@@ -395,7 +669,121 @@ function App() {
           </div>
         )}
 
-        {loading && !error ? (
+        {view === 'ai' && (
+          <section className="panel-section">
+            <h2>AI Travel Recommendation</h2>
+            <p>Enter a destination and get a personalized recommendation.</p>
+            <div className="panel-form">
+              <input
+                type="text"
+                value={aiDestination}
+                onChange={(e) => setAiDestination(e.target.value)}
+                placeholder="Destination (for example: Tokyo, Japan)"
+              />
+              <button onClick={askAiRecommendation} disabled={aiLoading}>
+                {aiLoading ? 'Thinking...' : 'Get Recommendation'}
+              </button>
+            </div>
+            {aiError && <div className="auth-error">{aiError}</div>}
+            {aiResult && <div className="panel-result">{aiResult}</div>}
+          </section>
+        )}
+
+        {view === 'mcp' && (
+          <section className="panel-section">
+            <h2>MCP Database Assistant</h2>
+            <p>Ask a data question about vacations. The backend MCP server will answer from the database.</p>
+            <div className="panel-form">
+              <input
+                type="text"
+                value={mcpQuestion}
+                onChange={(e) => setMcpQuestion(e.target.value)}
+                placeholder="Example: How many active vacations are there now?"
+              />
+              <button onClick={askMcpQuestion} disabled={mcpLoading}>
+                {mcpLoading ? 'Querying...' : 'Ask MCP'}
+              </button>
+            </div>
+            <div className="panel-hints">
+              <strong>Try:</strong> Active vacations count, average price, future Europe vacations.
+            </div>
+            {mcpError && <div className="auth-error">{mcpError}</div>}
+            {mcpResult && <div className="panel-result">{mcpResult}</div>}
+          </section>
+        )}
+
+        {view === 'create' && isAdmin && (
+          <section className="panel-section">
+            <h2>{editingId ? 'Edit Vacation' : 'Add Vacation'}</h2>
+
+            {!editingId && (
+              <form onSubmit={handleCreateVacation} className="admin-create-form">
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <input placeholder="Title" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} required />
+                  <input placeholder="Destination" value={newDestination} onChange={(e) => setNewDestination(e.target.value)} required />
+                  <input type="date" value={newStart} onChange={(e) => setNewStart(e.target.value)} min={getTodayString()} required />
+                  <input type="date" value={newEnd} onChange={(e) => setNewEnd(e.target.value)} min={newStart || getTodayString()} required />
+                  <input type="number" min={0} max={10000} step="0.01" placeholder="Price" value={newPrice} onChange={(e) => setNewPrice(e.target.value)} required />
+                  <input placeholder="Description" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} required />
+                  <input type="file" accept="image/*" onChange={(e) => setNewImageFile(e.target.files?.[0] ?? null)} required />
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <button type="submit">Create Vacation</button>
+                </div>
+              </form>
+            )}
+
+            {editingId && (
+              <form onSubmit={handleUpdateVacation} className="admin-create-form" style={{ border: '2px solid #ffc107', padding: 12 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <input placeholder="Title" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} required />
+                  <input placeholder="Destination" value={editDestination} onChange={(e) => setEditDestination(e.target.value)} required />
+                  <input type="date" value={editStart} onChange={(e) => setEditStart(e.target.value)} min={getTodayString()} required />
+                  <input type="date" value={editEnd} onChange={(e) => setEditEnd(e.target.value)} min={editStart || getTodayString()} required />
+                  <input type="number" min={0} max={10000} step="0.01" placeholder="Price" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} required />
+                  <input placeholder="Description" value={editDescription} onChange={(e) => setEditDescription(e.target.value)} required />
+                  <input type="file" accept="image/*" onChange={(e) => setEditImageFile(e.target.files?.[0] ?? null)} />
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <button type="submit">Update Vacation</button>
+                  <button type="button" onClick={() => setEditingId(null)} style={{ marginLeft: 8 }}>Cancel</button>
+                </div>
+              </form>
+            )}
+          </section>
+        )}
+
+        {view === 'report' && isAdmin && (
+          <section className="panel-section">
+            <h2>Vacation Likes Report</h2>
+            <div style={{ marginBottom: 10 }}>
+              <button onClick={downloadReportCsv}>Download CSV</button>
+            </div>
+
+            {reportLoading && <div className="loading"><p>Loading report...</p></div>}
+            {reportError && <div className="auth-error">{reportError}</div>}
+
+            {!reportLoading && !reportError && (
+              <div className="report-chart-wrap">
+                <div className="report-chart">
+                  {reportRows.map((row) => {
+                    const maxLikes = Math.max(1, ...reportRows.map((r) => Number(r.likes || 0)));
+                    const pct = Math.max(2, Math.round((Number(row.likes || 0) / maxLikes) * 100));
+                    return (
+                      <div key={row.destination} className="report-bar-col">
+                        <div className="report-bar-value">{row.likes}</div>
+                        <div className="report-bar" style={{ height: `${pct}%` }} title={`${row.destination}: ${row.likes}`} />
+                        <div className="report-bar-label">{row.destination}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {view === 'home' && (loading && !error ? (
           <div className="loading"><p>Loading vacations...⏳</p></div>
         ) : vacations.length === 0 ? (
           <div className="empty-state">
@@ -405,18 +793,7 @@ function App() {
         ) : (
           <>
             <div style={{ display: 'flex', gap: 12, margin: '12px 0', alignItems: 'center' }}>
-              <div>
-                {(['all', 'liked', 'active', 'future'] as const).map((f) => (
-                  <button
-                    key={f}
-                    onClick={() => changeFilter(f)}
-                    className={filter === f ? 'active-filter' : ''}
-                    style={{ marginLeft: f !== 'all' ? 8 : 0 }}
-                  >
-                    {f.charAt(0).toUpperCase() + f.slice(1)}
-                  </button>
-                ))}
-              </div>
+              <div><strong>Current Filter:</strong> {filter}</div>
               <div style={{ marginLeft: 'auto' }}>
                 <span>Page {page} / {Math.max(1, Math.ceil(total / limit))}</span>
               </div>
@@ -428,6 +805,9 @@ function App() {
               toggleLike={toggleLike}
               handleBooking={handleBooking}
               formatPrice={formatPrice}
+              isAdmin={isAdmin}
+              onEdit={startEditVacation}
+              onDelete={handleDeleteVacation}
             />
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 16 }}>
@@ -438,7 +818,7 @@ function App() {
               ))}
             </div>
           </>
-        )}
+        ))}
       </main>
 
       <footer className="footer">

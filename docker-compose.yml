@@ -1,8 +1,6 @@
 # Docker Compose Configuration for Vacation Website Project
 # This file orchestrates all services needed for the application
 
-version: '3.8'
-
 services:
   # MySQL Database Service
   mysql:
@@ -42,6 +40,47 @@ services:
       interval: 10s
     
     # Restart policy
+    restart: unless-stopped
+
+  # Backend API Service
+  backend:
+    build:
+      context: ./backend
+    container_name: vacation_backend
+    environment:
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      DB_NAME: ${DB_NAME:-vacation_db}
+      DB_USER: ${DB_USER:-vacation_user}
+      DB_PASSWORD: ${DB_PASSWORD:-userpassword}
+      DB_PORT: 3306
+      API_PORT: 5000
+      MCP_URL: http://mcp:3005/mcp
+      NODE_ENV: production
+    ports:
+      - "${API_PORT:-5000}:5000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # MCP Service
+  mcp:
+    build:
+      context: ./backend/mcp
+    container_name: vacation_mcp
+    environment:
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      DB_NAME: ${DB_NAME:-vacation_db}
+      DB_USER: ${DB_USER:-vacation_user}
+      DB_PASSWORD: ${DB_PASSWORD:-userpassword}
+      DB_PORT: 3306
+    ports:
+      - "3005:3005"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      backend:
+        condition: service_started
     restart: unless-stopped
 
 # Named volumes - persists data on your computer

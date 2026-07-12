@@ -1,0 +1,10 @@
+{
+  "app": {
+    "port": 3005,
+    "name": "Vacation MCP",
+    "host": "0.0.0.0"
+  },
+  "backend": {
+    "url": "http://localhost:5000"
+  }
+}

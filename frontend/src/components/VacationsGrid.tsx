@@ -8,6 +8,9 @@ interface VacationsGridProps {
   toggleLike: (vacationId: number) => void;
   handleBooking: (vacationId: number) => void;
   formatPrice: (price: string | number) => string;
+  isAdmin?: boolean;
+  onEdit?: (vacation: Vacation) => void;
+  onDelete?: (vacationId: number) => void;
 }
 
 const VacationsGrid: React.FC<VacationsGridProps> = ({
@@ -16,6 +19,9 @@ const VacationsGrid: React.FC<VacationsGridProps> = ({
   toggleLike,
   handleBooking,
   formatPrice,
+  isAdmin = false,
+  onEdit,
+  onDelete,
 }) => {
   return (
     <section className="vacations-grid">
@@ -27,6 +33,9 @@ const VacationsGrid: React.FC<VacationsGridProps> = ({
           toggleLike={toggleLike}
           handleBooking={handleBooking}
           formatPrice={formatPrice}
+          isAdmin={isAdmin}
+          onEdit={onEdit}
+          onDelete={onDelete}
         />
       ))}
     </section>

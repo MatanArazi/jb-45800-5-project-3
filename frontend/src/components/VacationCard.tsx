@@ -1,5 +1,6 @@
 import React from 'react';
 import { Vacation } from '../types';
+import petraFallback from './DHHXC2.avif';
 
 interface VacationCardProps {
   vacation: Vacation;
@@ -7,6 +8,9 @@ interface VacationCardProps {
   toggleLike: (vacationId: number) => void;
   handleBooking: (vacationId: number) => void;
   formatPrice: (price: string | number) => string;
+  isAdmin?: boolean;
+  onEdit?: (vacation: Vacation) => void;
+  onDelete?: (vacationId: number) => void;
 }
 
 const VacationCard: React.FC<VacationCardProps> = ({
@@ -15,12 +19,18 @@ const VacationCard: React.FC<VacationCardProps> = ({
   toggleLike,
   handleBooking,
   formatPrice,
+  isAdmin = false,
+  onEdit,
+  onDelete,
 }) => {
+  const isPetra = vacation.destination.toLowerCase().includes('petra');
+  const imageSrc = isPetra ? petraFallback : (vacation.displayImage || vacation.image_url);
+
   return (
     <div key={vacation.vacation_id} className="vacation-card">
-      {(vacation.displayImage || vacation.image_url) && (
+      {imageSrc && (
         <img
-          src={vacation.displayImage || vacation.image_url!}
+          src={imageSrc}
           alt={vacation.title}
           className="vacation-image"
         />
@@ -62,6 +72,28 @@ const VacationCard: React.FC<VacationCardProps> = ({
           >
             📝 Book Now
           </button>
+
+          {isAdmin && (
+            <>
+              <button
+                className="edit-button"
+                onClick={() => onEdit?.(vacation)}
+                title="Edit this vacation"
+                style={{ backgroundColor: '#ffc107', color: '#000', padding: '8px 12px', borderRadius: '4px', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
+              >
+                ✏️ Edit
+              </button>
+
+              <button
+                className="delete-button"
+                onClick={() => onDelete?.(vacation.vacation_id)}
+                title="Delete this vacation"
+                style={{ backgroundColor: '#dc3545', color: '#fff', padding: '8px 12px', borderRadius: '4px', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
+              >
+                🗑️ Delete
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

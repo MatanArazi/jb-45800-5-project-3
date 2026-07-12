@@ -30,6 +30,161 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+const MCP_URL = process.env.MCP_URL || 'http://localhost:3005/mcp';
+
+function toDateOnly(value) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function todayDateOnly() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function toPublicImageUrl(image) {
+  if (!image) return null;
+  if (String(image).startsWith('http://') || String(image).startsWith('https://') || String(image).startsWith('/uploads/')) {
+    return image;
+  }
+  return `/uploads/${image}`;
+}
+
+function imageFilePathFromStored(image) {
+  if (!image) return null;
+  const fileName = String(image).startsWith('/uploads/') ? String(image).replace('/uploads/', '') : String(image);
+  return path.join(uploadDir, fileName);
+}
+
+async function parseMcpJsonResponse(response) {
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+
+  if (contentType.includes('application/json')) {
+    return await response.json();
+  }
+
+  if (contentType.includes('text/event-stream')) {
+    const reader = response.body && response.body.getReader ? response.body.getReader() : null;
+    if (!reader) {
+      throw new Error('MCP SSE response body was not readable');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) {
+          continue;
+        }
+
+        const data = trimmed.slice(5).trim();
+        if (!data) {
+          continue;
+        }
+
+        return JSON.parse(data);
+      }
+    }
+
+    throw new Error('MCP SSE response ended before JSON data was received');
+  }
+
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Unsupported MCP response content type: ${contentType || 'unknown'}`);
+  }
+}
+
+async function callMcpDatabaseQuestion(question) {
+  const initializeResponse = await fetch(MCP_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream'
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: {
+          name: 'vacation-website-api-js',
+          version: '1.0.0'
+        }
+      }
+    })
+  });
+
+  if (!initializeResponse.ok) {
+    throw new Error(`MCP initialize failed with status ${initializeResponse.status}`);
+  }
+
+  const sessionId = initializeResponse.headers.get('mcp-session-id');
+  if (!sessionId) {
+    throw new Error('MCP session id was not returned by MCP server');
+  }
+
+  await fetch(MCP_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+      'mcp-session-id': sessionId
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'notifications/initialized',
+      params: {}
+    })
+  });
+
+  const toolResponse = await fetch(MCP_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+      'mcp-session-id': sessionId
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'vacation_database_question',
+        arguments: { question }
+      }
+    })
+  });
+
+  if (!toolResponse.ok) {
+    throw new Error(`MCP tool call failed with status ${toolResponse.status}`);
+  }
+
+  const payload = await parseMcpJsonResponse(toolResponse);
+  const text = payload && payload.result && Array.isArray(payload.result.content)
+    ? (payload.result.content.find((item) => item.type === 'text') || {}).text
+    : null;
+
+  if (!text) {
+    throw new Error('MCP server returned no text response');
+  }
+
+  return text;
+}
+
 // Admin middleware: checks header or users.role if available
 async function adminOnly(req, res, next) {
   try {
@@ -141,7 +296,12 @@ app.get('/api/vacations', async (req, res) => {
     const [vacations] = await connection.execute(mainQuery, mainParams);
     connection.release();
 
-    res.json({ success: true, count: vacations.length, total, page, limit, data: vacations });
+    const normalized = vacations.map((v) => ({
+      ...v,
+      image_url: toPublicImageUrl(v.image_url || null),
+    }));
+
+    res.json({ success: true, count: normalized.length, total, page, limit, data: normalized });
   } catch (error) {
     console.error('Error fetching vacations:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -189,6 +349,7 @@ app.get('/api/vacations/:id', async (req, res) => {
       success: true,
       data: {
         ...vacation[0],
+        image_url: toPublicImageUrl(vacation[0].image_url || null),
         total_likes: likeCount[0].total_likes,
         reviews: reviews
       }
@@ -230,13 +391,32 @@ app.get('/api/vacations/destination/:destination', async (req, res) => {
 app.post('/api/vacations', adminOnly, upload.single('image'), async (req, res) => {
   try {
     const { title, description, destination, start_date, end_date, price } = req.body;
-    const created_by = req.body.created_by || req.headers['x-user-id'] || 1;
 
-    // determine image URL: uploaded file takes precedence
-    let image_url = req.body.image_url || null;
-    if (req.file && req.file.filename) {
-      image_url = `/uploads/${req.file.filename}`;
+    if (!title || !description || !destination || !start_date || !end_date || price === undefined || price === null) {
+      return res.status(400).json({ success: false, error: 'All fields are required' });
     }
+
+    if (!req.file || !req.file.filename) {
+      return res.status(400).json({ success: false, error: 'Image file is required' });
+    }
+
+    const numericPrice = Number(price);
+    if (!Number.isFinite(numericPrice) || numericPrice < 0 || numericPrice > 10000) {
+      return res.status(400).json({ success: false, error: 'Price must be between 0 and 10000' });
+    }
+
+    const startDateOnly = toDateOnly(String(start_date));
+    const endDateOnly = toDateOnly(String(end_date));
+    const today = todayDateOnly();
+    if (startDateOnly < today) {
+      return res.status(400).json({ success: false, error: 'Start date cannot be in the past' });
+    }
+    if (endDateOnly < startDateOnly) {
+      return res.status(400).json({ success: false, error: 'End date must be on or after start date' });
+    }
+
+    const created_by = req.body.created_by || req.headers['x-user-id'] || 1;
+    const imageFileName = req.file.filename;
 
     const connection = await pool.getConnection();
 
@@ -246,7 +426,7 @@ app.post('/api/vacations', adminOnly, upload.single('image'), async (req, res) =
     `;
 
     const [result] = await connection.execute(query, [
-      title, description, destination, start_date, end_date, price, image_url, created_by
+      title, description, destination, startDateOnly, endDateOnly, numericPrice, imageFileName, created_by
     ]);
 
     connection.release();
@@ -255,7 +435,7 @@ app.post('/api/vacations', adminOnly, upload.single('image'), async (req, res) =
       success: true,
       message: 'Vacation created',
       vacation_id: result.insertId,
-      image_url
+      image_url: toPublicImageUrl(imageFileName)
     });
   } catch (error) {
     console.error('Error creating vacation:', error);
@@ -335,7 +515,11 @@ app.get('/api/users/:user_id/likes', async (req, res) => {
     `, [user_id]);
     
     connection.release();
-    res.json({ success: true, data: likes });
+    const normalized = likes.map((v) => ({
+      ...v,
+      image_url: toPublicImageUrl(v.image_url || null),
+    }));
+    res.json({ success: true, data: normalized });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -504,6 +688,22 @@ app.post('/api/reviews', async (req, res) => {
   }
 });
 
+// ==================== MCP QUERY ROUTE ====================
+
+app.post('/api/mcp/query', async (req, res) => {
+  try {
+    const question = String(req.body && req.body.question ? req.body.question : '').trim();
+    if (!question) {
+      return res.status(400).json({ success: false, error: 'Question is required' });
+    }
+
+    const answer = await callMcpDatabaseQuestion(question);
+    return res.json({ success: true, answer, via: 'mcp' });
+  } catch (error) {
+    return res.status(502).json({ success: false, error: `MCP server unavailable: ${error.message}` });
+  }
+});
+
 /**
  * PUT /api/vacations/:id
  * Update an existing vacation (admin only). Accepts multipart/form-data with optional `image` file.
@@ -517,14 +717,40 @@ app.put('/api/vacations/:id', adminOnly, upload.single('image'), async (req, res
     const allowed = ['title', 'description', 'destination', 'start_date', 'end_date', 'price'];
     for (const key of allowed) {
       if (req.body[key]) {
+        if (key === 'price') {
+          const numericPrice = Number(req.body[key]);
+          if (!Number.isFinite(numericPrice) || numericPrice < 0 || numericPrice > 10000) {
+            return res.status(400).json({ success: false, error: 'Price must be between 0 and 10000' });
+          }
+          fields.push('price = ?');
+          params.push(numericPrice);
+          continue;
+        }
+
+        if (key === 'start_date' || key === 'end_date') {
+          fields.push(`${key} = ?`);
+          params.push(toDateOnly(String(req.body[key])));
+          continue;
+        }
+
         fields.push(`${key} = ?`);
         params.push(req.body[key]);
       }
     }
 
+    const startCandidate = req.body.start_date ? toDateOnly(String(req.body.start_date)) : null;
+    const endCandidate = req.body.end_date ? toDateOnly(String(req.body.end_date)) : null;
+    const today = todayDateOnly();
+    if (startCandidate && startCandidate < today) {
+      return res.status(400).json({ success: false, error: 'Start date cannot be in the past' });
+    }
+    if (startCandidate && endCandidate && endCandidate < startCandidate) {
+      return res.status(400).json({ success: false, error: 'End date must be on or after start date' });
+    }
+
     // handle image file
     if (req.file && req.file.filename) {
-      const newImageUrl = `/uploads/${req.file.filename}`;
+      const newImageUrl = req.file.filename;
       fields.push('image_url = ?');
       params.push(newImageUrl);
 
@@ -532,9 +758,11 @@ app.put('/api/vacations/:id', adminOnly, upload.single('image'), async (req, res
       const connection = await pool.getConnection();
       try {
         const [rows] = await connection.execute('SELECT image_url FROM vacations WHERE vacation_id = ?', [id]);
-        if (rows.length > 0 && rows[0].image_url && String(rows[0].image_url).startsWith('/uploads/')) {
-          const oldPath = path.join(__dirname, rows[0].image_url);
-          fs.unlink(oldPath, (err) => { if (err) console.warn('Failed to remove old image', err.message); });
+        if (rows.length > 0 && rows[0].image_url) {
+          const oldPath = imageFilePathFromStored(rows[0].image_url);
+          if (oldPath) {
+            fs.unlink(oldPath, (err) => { if (err) console.warn('Failed to remove old image', err.message); });
+          }
         }
       } finally {
         connection.release();
@@ -568,7 +796,6 @@ app.delete('/api/vacations/:id', adminOnly, async (req, res) => {
       // get image url to remove file
       const [rows] = await connection.execute('SELECT image_url FROM vacations WHERE vacation_id = ?', [id]);
       if (rows.length === 0) {
-        connection.release();
         return res.status(404).json({ success: false, error: 'Vacation not found' });
       }
       const imageUrl = rows[0].image_url;
@@ -576,9 +803,11 @@ app.delete('/api/vacations/:id', adminOnly, async (req, res) => {
       await connection.execute('DELETE FROM vacations WHERE vacation_id = ?', [id]);
 
       // remove file if uploaded to our uploads dir
-      if (imageUrl && String(imageUrl).startsWith('/uploads/')) {
-        const filePath = path.join(__dirname, imageUrl);
-        fs.unlink(filePath, (err) => { if (err) console.warn('Failed to remove image file', err.message); });
+      if (imageUrl) {
+        const filePath = imageFilePathFromStored(imageUrl);
+        if (filePath) {
+          fs.unlink(filePath, (err) => { if (err) console.warn('Failed to remove image file', err.message); });
+        }
       }
     } finally {
       connection.release();
@@ -631,6 +860,50 @@ app.get('/api/stats', async (req, res) => {
         reviews: reviewCount[0].count
       }
     });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/reports/vacation-likes', async (req, res) => {
+  try {
+    const connection = await pool.getConnection();
+    const [rows] = await connection.execute(
+      `SELECT v.destination, COUNT(l.like_id) AS likes
+       FROM vacations v
+       LEFT JOIN likes l ON l.vacation_id = v.vacation_id
+       GROUP BY v.destination
+       ORDER BY likes DESC, v.destination ASC`
+    );
+    connection.release();
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/reports/vacation-likes.csv', async (req, res) => {
+  try {
+    const connection = await pool.getConnection();
+    const [rows] = await connection.execute(
+      `SELECT v.destination, COUNT(l.like_id) AS likes
+       FROM vacations v
+       LEFT JOIN likes l ON l.vacation_id = v.vacation_id
+       GROUP BY v.destination
+       ORDER BY likes DESC, v.destination ASC`
+    );
+    connection.release();
+
+    const csvLines = ['destination,likes'];
+    for (const row of rows) {
+      const destination = String(row.destination || '').replace(/"/g, '""');
+      const likes = Number(row.likes || 0);
+      csvLines.push(`"${destination}",${likes}`);
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="vacation-likes-report.csv"');
+    res.status(200).send(csvLines.join('\n'));
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
