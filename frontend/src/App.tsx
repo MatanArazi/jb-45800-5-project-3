@@ -2,39 +2,16 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 import VacationsGrid from './components/VacationsGrid';
+import AboutPanel from './components/layout/about-panel/AboutPanel';
+import PublicNav from './components/layout/public-nav/PublicNav';
 import { Vacation, User, Stats } from './types';
+import authService from './services/auth';
+import vacationsService from './services/vacations';
 
 const API_BASE = 'http://localhost:5000/api';
 
-interface VacationsResponse {
-  success: boolean;
-  count: number;
-  total: number;
-  page: number;
-  limit: number;
-  data: Vacation[];
-}
-
-interface StatsResponse {
-  success: boolean;
-  stats: Stats;
-}
-
-interface AuthResponse {
-  success: boolean;
-  user?: User;
-  error?: string;
-}
-
-interface CreateUserResponse {
-  success: boolean;
-  message?: string;
-  user?: User;
-  user_id?: number;
-  error?: string;
-}
-
-type AppView = 'home' | 'ai' | 'mcp' | 'create' | 'report';
+type AppView = 'home' | 'ai' | 'mcp' | 'create' | 'report' | 'about';
+type PublicView = 'signin' | 'signup' | 'about';
 
 interface AiResponse {
   success: boolean;
@@ -53,12 +30,6 @@ interface ReportRow {
   likes: number;
 }
 
-interface ReportResponse {
-  success: boolean;
-  data: ReportRow[];
-  error?: string;
-}
-
 function App() {
   const [vacations, setVacations] = useState<Vacation[]>([]);
   const [page, setPage] = useState<number>(1);
@@ -71,7 +42,6 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   // Admin create form
-  const [showAdminCreate, setShowAdminCreate] = useState<boolean>(false);
   const [newTitle, setNewTitle] = useState<string>('');
   const [newDescription, setNewDescription] = useState<string>('');
   const [newDestination, setNewDestination] = useState<string>('');
@@ -106,7 +76,7 @@ function App() {
   // Signup-specific fields
   const [signupFirst, setSignupFirst] = useState<string>('');
   const [signupLast, setSignupLast] = useState<string>('');
-  const [showSignupPopup, setShowSignupPopup] = useState<boolean>(false);
+  const [publicView, setPublicView] = useState<PublicView>('signin');
   const [view, setView] = useState<AppView>('home');
 
   // AI page state
@@ -125,6 +95,8 @@ function App() {
   const [reportError, setReportError] = useState<string | null>(null);
 
   const isAdmin = currentUser?.role === 'admin';
+  const fullName = [currentUser?.first_name, currentUser?.last_name].filter(Boolean).join(' ').trim();
+  const displayName = fullName || currentUser?.email || 'User';
 
   useEffect(() => {
     if (currentUser) {
@@ -143,6 +115,13 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser, view]);
 
+  useEffect(() => {
+    if (isAdmin && filter !== 'all') {
+      setFilter('all');
+      setPage(1);
+    }
+  }, [isAdmin, filter]);
+
   const fetchImageAsDataUrl = async (url: string): Promise<string> => {
     const res = await fetch(url);
     if (!res.ok) throw new Error('Image fetch failed');
@@ -160,10 +139,10 @@ function App() {
       setLoading(true);
       const params: Record<string, string | number> = { page: pageArg, limit, filter: filterArg };
       if (currentUser) params.user_id = currentUser.user_id;
-      const response = await axios.get<VacationsResponse>(`${API_BASE}/vacations`, { params });
-      const items: Vacation[] = response.data.data || [];
-      setTotal(response.data.total || 0);
-      setPage(response.data.page || pageArg);
+      const response = await vacationsService.getVacations(params);
+      const items: Vacation[] = response.data || [];
+      setTotal(response.total || 0);
+      setPage(response.page || pageArg);
 
       const withImages = await Promise.all(
         items.map(async (v) => {
@@ -205,8 +184,8 @@ function App() {
 
   const fetchStats = async (): Promise<void> => {
     try {
-      const response = await axios.get<StatsResponse>(`${API_BASE}/stats`);
-      setStats(response.data.stats);
+      const response = await vacationsService.getStats();
+      setStats(response.stats);
     } catch (err) {
       console.error('Error fetching stats:', err);
     }
@@ -228,37 +207,29 @@ function App() {
 
   const toggleLike = async (vacationId: number): Promise<void> => {
     try {
+      if (isAdmin) {
+        alert('Admins cannot like or unlike vacations');
+        return;
+      }
+
       const userId = currentUser?.user_id;
       if (!userId) { alert('Please log in to like vacations'); return; }
 
       if (userLikes.has(vacationId)) {
-        await axios.delete(`${API_BASE}/likes/${userId}/${vacationId}`);
+        await vacationsService.removeLike(userId, vacationId);
         setUserLikes((prev) => {
           const next = new Set(prev);
           next.delete(vacationId);
           return next;
         });
       } else {
-        await axios.post(`${API_BASE}/likes`, { user_id: userId, vacation_id: vacationId });
+        await vacationsService.addLike(userId, vacationId);
         setUserLikes((prev) => new Set(prev).add(vacationId));
       }
       fetchVacations(page, filter);
     } catch (err) {
       console.error('Error toggling like:', err);
       alert('Error updating like');
-    }
-  };
-
-  const handleBooking = async (vacationId: number): Promise<void> => {
-    try {
-      const userId = currentUser?.user_id;
-      if (!userId) { alert('Please log in to make a booking'); return; }
-      await axios.post(`${API_BASE}/bookings`, { user_id: userId, vacation_id: vacationId, status: 'pending' });
-      alert('Booking created successfully!');
-      fetchStats();
-    } catch (err) {
-      console.error('Error creating booking:', err);
-      alert('Error creating booking');
     }
   };
 
@@ -296,16 +267,10 @@ function App() {
       form.append('created_by', String(currentUser?.user_id ?? 1));
       if (newImageFile) form.append('image', newImageFile);
 
-      await axios.post(`${API_BASE}/vacations`, form, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          ...(currentUser?.user_id ? { 'x-user-id': String(currentUser.user_id) } : {}),
-        },
-      });
+      await vacationsService.createVacation(form, currentUser?.user_id);
 
       setNewTitle(''); setNewDescription(''); setNewDestination('');
       setNewStart(''); setNewEnd(''); setNewPrice(''); setNewImageFile(null);
-      setShowAdminCreate(false);
       setView('home');
       fetchVacations(page, filter);
       fetchStats();
@@ -329,15 +294,14 @@ function App() {
     setEditEnd(vacation.end_date.split('T')[0]);
     setEditPrice(String(vacation.price));
     setEditImageFile(null);
-    setShowAdminCreate(false);
   };
 
   const fetchVacationReport = async (): Promise<void> => {
     try {
       setReportLoading(true);
       setReportError(null);
-      const res = await axios.get<ReportResponse>(`${API_BASE}/reports/vacation-likes`);
-      setReportRows((res.data?.data || []).map((r) => ({ destination: r.destination, likes: Number(r.likes || 0) })));
+      const res = await vacationsService.getLikesReport();
+      setReportRows((res.data || []).map((r) => ({ destination: r.destination, likes: Number(r.likes || 0) })));
     } catch (err: any) {
       setReportError(err?.response?.data?.error || 'Failed to load report');
     } finally {
@@ -347,8 +311,8 @@ function App() {
 
   const downloadReportCsv = async (): Promise<void> => {
     try {
-      const res = await axios.get<Blob>(`${API_BASE}/reports/vacation-likes.csv`, { responseType: 'blob' });
-      const blob = new Blob([res.data as BlobPart], { type: 'text/csv;charset=utf-8;' });
+      const csvBlob = await vacationsService.getLikesReportCsv();
+      const blob = new Blob([csvBlob as BlobPart], { type: 'text/csv;charset=utf-8;' });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -386,12 +350,7 @@ function App() {
       form.append('price', editPrice);
       if (editImageFile) form.append('image', editImageFile);
 
-      await axios.put(`${API_BASE}/vacations/${editingId}`, form, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-          ...(currentUser?.user_id ? { 'x-user-id': String(currentUser.user_id) } : {}),
-        },
-      });
+      await vacationsService.updateVacation(editingId, form, currentUser?.user_id);
 
       setEditingId(null);
       fetchVacations(page, filter);
@@ -407,9 +366,7 @@ function App() {
     if (!window.confirm('Are you sure you want to delete this vacation?')) return;
 
     try {
-      await axios.delete(`${API_BASE}/vacations/${vacationId}`, {
-        headers: currentUser?.user_id ? { 'x-user-id': String(currentUser.user_id) } : {},
-      });
+      await vacationsService.deleteVacation(vacationId, currentUser?.user_id);
 
       fetchVacations(page, filter);
       fetchStats();
@@ -425,10 +382,10 @@ function App() {
     setAuthLoading(true);
     setAuthError(null);
     try {
-      const res = await axios.post<AuthResponse>(`${API_BASE}/auth/login`, { email: loginEmail, password: loginPassword });
-      if (res.data?.user) {
-        setCurrentUser(res.data.user as User);
-        try { localStorage.setItem('currentUser', JSON.stringify(res.data.user)); } catch {}
+      const loginData = await authService.login(loginEmail, loginPassword);
+      if (loginData?.user) {
+        setCurrentUser(loginData.user as User);
+        try { localStorage.setItem('currentUser', JSON.stringify(loginData.user)); } catch {}
         setLoginEmail(''); setLoginPassword('');
       }
     } catch (err: any) {
@@ -446,17 +403,15 @@ function App() {
       const first = signupFirst || loginEmail.split('@')[0] || 'User';
       const last = signupLast || 'Guest';
 
-      const res = await axios.post<CreateUserResponse>(`${API_BASE}/users`, {
-        first_name: first, last_name: last, email: loginEmail, password_hash: loginPassword,
-      });
+      const res = await authService.signup(first, last, loginEmail, loginPassword);
 
-      if (res.data?.user_id || res.data?.user) {
-        const loginRes = await axios.post<AuthResponse>(`${API_BASE}/auth/login`, { email: loginEmail, password: loginPassword });
-        if (loginRes.data?.user) {
-          setCurrentUser(loginRes.data.user as User);
-          try { localStorage.setItem('currentUser', JSON.stringify(loginRes.data.user)); } catch {}
+      if (res?.user_id || res?.user) {
+        const loginRes = await authService.login(loginEmail, loginPassword);
+        if (loginRes?.user) {
+          setCurrentUser(loginRes.user as User);
+          try { localStorage.setItem('currentUser', JSON.stringify(loginRes.user)); } catch {}
           setSignupFirst(''); setSignupLast(''); setLoginEmail(''); setLoginPassword('');
-          setShowSignupPopup(false);
+          setPublicView('signin');
         }
       }
     } catch (err: any) {
@@ -527,7 +482,9 @@ function App() {
     return (
       <div className="auth-fullpage">
         <div className="auth-container">
-          {!showSignupPopup ? (
+          <PublicNav publicView={publicView} onChangeView={setPublicView} />
+
+          {publicView === 'signin' && (
             <div className="auth-card-large">
               <h1>Sign in to Vacation Paradise</h1>
               {authError && <div className="auth-error">{authError}</div>}
@@ -540,13 +497,15 @@ function App() {
                   <button type="submit" disabled={authLoading}>Sign in</button>
                 </div>
                 <div style={{ marginTop: '12px' }}>
-                  <button type="button" onClick={() => setShowSignupPopup(true)} className="link-button">
+                  <button type="button" onClick={() => setPublicView('signup')} className="link-button">
                     Not a user? Create an account
                   </button>
                 </div>
               </form>
             </div>
-          ) : (
+          )}
+
+          {publicView === 'signup' && (
             <div className="signup-page">
               <div className="signup-card-large">
                 <h1>Create your account</h1>
@@ -562,12 +521,14 @@ function App() {
                   <input value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} type="password" required />
                   <div className="auth-actions-vertical">
                     <button type="submit" disabled={authLoading}>Create account</button>
-                    <button type="button" onClick={() => setShowSignupPopup(false)}>Back to sign in</button>
+                    <button type="button" onClick={() => setPublicView('signin')}>Back to sign in</button>
                   </div>
                 </form>
               </div>
             </div>
           )}
+
+          {publicView === 'about' && <AboutPanel isPublic />}
         </div>
       </div>
     );
@@ -578,11 +539,11 @@ function App() {
       <header className="header">
         <div className="header-content">
           <h1>🏖️ Vacation Paradise</h1>
-          <p>Discover and book your dream vacation</p>
+          <p>Discover and like your dream vacation</p>
         </div>
         <div className="header-user">
           <div className="user-badge">
-            <span>👤 {currentUser.first_name} {currentUser.last_name}</span>
+            <span>👤 {displayName}</span>
             <button className="logout" onClick={handleLogout}>Logout</button>
           </div>
         </div>
@@ -597,7 +558,7 @@ function App() {
             >
               Home
             </button>
-            {(['all', 'liked', 'active', 'future'] as const).map((f) => (
+            {!isAdmin && (['all', 'liked', 'active', 'future'] as const).map((f) => (
               <button
                 key={f}
                 onClick={() => { setView('home'); changeFilter(f); }}
@@ -615,7 +576,6 @@ function App() {
                   className={`nav-pill nav-pill-tool ${view === 'create' ? 'active-filter' : ''}`}
                   onClick={() => {
                     setView('create');
-                    setShowAdminCreate(true);
                     setEditingId(null);
                   }}
                 >
@@ -641,6 +601,12 @@ function App() {
             >
               Any questions? click here
             </button>
+            <button
+              className={`nav-pill nav-pill-tool ${view === 'about' ? 'active-filter' : ''}`}
+              onClick={() => setView('about')}
+            >
+              About
+            </button>
           </div>
         </nav>
       </div>
@@ -652,7 +618,7 @@ function App() {
             <div className="stat-card"><h3>{stats.vacations}</h3><p>Vacations</p></div>
             <div className="stat-card"><h3>{stats.users}</h3><p>Users</p></div>
             <div className="stat-card"><h3>{stats.likes}</h3><p>Total Likes</p></div>
-            <div className="stat-card"><h3>{stats.bookings}</h3><p>Bookings</p></div>
+            <div className="stat-card"><h3>{stats.reviews}</h3><p>Reviews</p></div>
           </div>
         </section>
       )}
@@ -783,6 +749,8 @@ function App() {
           </section>
         )}
 
+        {view === 'about' && <AboutPanel />}
+
         {view === 'home' && (loading && !error ? (
           <div className="loading"><p>Loading vacations...⏳</p></div>
         ) : vacations.length === 0 ? (
@@ -803,7 +771,6 @@ function App() {
               vacations={vacations}
               userLikes={userLikes}
               toggleLike={toggleLike}
-              handleBooking={handleBooking}
               formatPrice={formatPrice}
               isAdmin={isAdmin}
               onEdit={startEditVacation}

@@ -6,7 +6,6 @@ interface VacationsGridProps {
   vacations: Vacation[];
   userLikes: Set<number>;
   toggleLike: (vacationId: number) => void;
-  handleBooking: (vacationId: number) => void;
   formatPrice: (price: string | number) => string;
   isAdmin?: boolean;
   onEdit?: (vacation: Vacation) => void;
@@ -17,7 +16,6 @@ const VacationsGrid: React.FC<VacationsGridProps> = ({
   vacations,
   userLikes,
   toggleLike,
-  handleBooking,
   formatPrice,
   isAdmin = false,
   onEdit,
@@ -31,7 +29,6 @@ const VacationsGrid: React.FC<VacationsGridProps> = ({
           vacation={v}
           userLikes={userLikes}
           toggleLike={toggleLike}
-          handleBooking={handleBooking}
           formatPrice={formatPrice}
           isAdmin={isAdmin}
           onEdit={onEdit}

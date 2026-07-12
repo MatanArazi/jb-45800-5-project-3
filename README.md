@@ -1,7 +1,7 @@
 # Vacation Selling Website
 
 ## Overview
-Vacation Selling Website is a full-stack application for browsing, liking, and booking vacation packages.
+Vacation Selling Website is a full-stack application for browsing, liking, and managing vacation packages.
 
 The system supports role-based access (`admin` and `user`), authentication, pagination, filtering, and image-backed vacation cards.
 
@@ -16,7 +16,7 @@ The system supports role-based access (`admin` and `user`), authentication, pagi
 - Role-based authorization (`admin` / `user`)
 - Vacation catalog with pagination (`page`, `limit`)
 - Single active filter per request (`all`, `liked`, `active`, `future`)
-- Likes and bookings
+- Likes
 - Vacation CRUD for admins
 - Vacation images via URL or uploaded files
 
@@ -32,8 +32,27 @@ The system supports role-based access (`admin` and `user`), authentication, pagi
 
 ## Repository Notes
 - Main backend entry: `backend/server.ts`
+- Backend modular structure: `backend/controllers`, `backend/routers`, `backend/middlewares`
 - Main frontend entry: `frontend/src/App.tsx`
+- Frontend modular structure: `frontend/src/services`, `frontend/src/components/layout`
 - Docker definition: `docker-compose.yml`
+
+## Run With Docker
+1. Copy `.env.example` to `.env` (optional if defaults are fine).
+2. Start all services:
+
+```bash
+docker compose up -d --build
+```
+
+3. Open the app at `http://localhost:3000`.
+4. Backend API is available at `http://localhost:5000`.
+
+This command starts all required containers:
+- `mysql` (database)
+- `backend` (API)
+- `mcp` (MCP service)
+- `frontend` (React app)
 
 ## Status
 - In active development

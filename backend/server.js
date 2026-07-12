@@ -1,6 +1,6 @@
 /**
  * Vacation Website API Server
- * Main Express server with routes for vacations, users, likes, bookings, and reviews
+ * Main Express server with routes for vacations, users, likes, and reviews
  */
 
 const express = require('express');
@@ -220,7 +220,7 @@ let pool;
 async function initializePool() {
   try {
     pool = mysql.createPool({
-      host: 'localhost',
+      host: process.env.DB_HOST || 'localhost',
       user: process.env.DB_USER || 'vacation_user',
       password: process.env.DB_PASSWORD || 'userpassword',
       database: process.env.DB_NAME || 'vacation_db',
@@ -234,6 +234,17 @@ async function initializePool() {
   } catch (error) {
     console.error('✗ Database connection failed:', error.message);
     return false;
+  }
+}
+
+async function getUserRole(userId) {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.execute('SELECT role FROM users WHERE user_id = ?', [userId]);
+    if (!rows.length) return null;
+    return rows[0].role || null;
+  } finally {
+    connection.release();
   }
 }
 
@@ -452,12 +463,23 @@ app.post('/api/vacations', adminOnly, upload.single('image'), async (req, res) =
 app.post('/api/likes', async (req, res) => {
   try {
     const { user_id, vacation_id } = req.body;
+    const userId = Number(user_id);
+    const vacationId = Number(vacation_id);
+    if (!Number.isInteger(userId) || !Number.isInteger(vacationId)) {
+      return res.status(400).json({ success: false, error: 'user_id and vacation_id are required' });
+    }
+
+    const role = await getUserRole(userId);
+    if (role === 'admin') {
+      return res.status(403).json({ success: false, error: 'Admins cannot like or unlike vacations' });
+    }
+
     const connection = await pool.getConnection();
     
     // Check if already liked
     const [existing] = await connection.execute(
       'SELECT * FROM likes WHERE user_id = ? AND vacation_id = ?',
-      [user_id, vacation_id]
+      [userId, vacationId]
     );
     
     if (existing.length > 0) {
@@ -468,7 +490,7 @@ app.post('/api/likes', async (req, res) => {
     // Insert like
     await connection.execute(
       'INSERT INTO likes (user_id, vacation_id) VALUES (?, ?)',
-      [user_id, vacation_id]
+      [userId, vacationId]
     );
     
     connection.release();
@@ -485,11 +507,22 @@ app.post('/api/likes', async (req, res) => {
 app.delete('/api/likes/:user_id/:vacation_id', async (req, res) => {
   try {
     const { user_id, vacation_id } = req.params;
+    const userId = Number(user_id);
+    const vacationId = Number(vacation_id);
+    if (!Number.isInteger(userId) || !Number.isInteger(vacationId)) {
+      return res.status(400).json({ success: false, error: 'user_id and vacation_id are required' });
+    }
+
+    const role = await getUserRole(userId);
+    if (role === 'admin') {
+      return res.status(403).json({ success: false, error: 'Admins cannot like or unlike vacations' });
+    }
+
     const connection = await pool.getConnection();
     
     await connection.execute(
       'DELETE FROM likes WHERE user_id = ? AND vacation_id = ?',
-      [user_id, vacation_id]
+      [userId, vacationId]
     );
     
     connection.release();
@@ -534,7 +567,7 @@ app.get('/api/users/:user_id/likes', async (req, res) => {
 app.get('/api/users', async (req, res) => {
   try {
     const connection = await pool.getConnection();
-    const [users] = await connection.execute('SELECT user_id, first_name, last_name, email, created_at FROM users');
+    const [users] = await connection.execute('SELECT user_id, role, first_name, last_name, email, created_at FROM users');
     connection.release();
     res.json({ success: true, data: users });
   } catch (error) {
@@ -570,7 +603,7 @@ app.post('/api/users', async (req, res) => {
     );
 
     // Return created user (without password)
-    const [rows] = await connection.execute('SELECT user_id, first_name, last_name, email FROM users WHERE user_id = ?', [result.insertId]);
+    const [rows] = await connection.execute('SELECT user_id, role, first_name, last_name, email FROM users WHERE user_id = ?', [result.insertId]);
     connection.release();
     res.status(201).json({ success: true, message: 'User created', user: rows[0] });
   } catch (error) {
@@ -593,7 +626,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     const connection = await pool.getConnection();
     const [rows] = await connection.execute(
-      'SELECT user_id, first_name, last_name, email FROM users WHERE email = ? AND password_hash = ?',
+      'SELECT user_id, role, first_name, last_name, email FROM users WHERE email = ? AND password_hash = ?',
       [email, password]
     );
     connection.release();
@@ -604,59 +637,6 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ success: true, user: rows[0] });
   } catch (error) {
     console.error('Auth error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ==================== BOOKINGS ROUTES ====================
-
-/**
- * POST /api/bookings
- * Create a new booking
- */
-app.post('/api/bookings', async (req, res) => {
-  try {
-    const { user_id, vacation_id, status = 'pending' } = req.body;
-    const connection = await pool.getConnection();
-    
-    const [result] = await connection.execute(
-      'INSERT INTO bookings (user_id, vacation_id, status) VALUES (?, ?, ?)',
-      [user_id, vacation_id, status]
-    );
-    
-    connection.release();
-    res.status(201).json({
-      success: true,
-      message: 'Booking created',
-      booking_id: result.insertId
-    })
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-/**
- * GET /api/bookings/:booking_id
- * Get a specific booking
- */
-app.get('/api/bookings/:booking_id', async (req, res) => {
-  try {
-    const { booking_id } = req.params;
-    const connection = await pool.getConnection();
-    
-    const [booking] = await connection.execute(
-      'SELECT * FROM bookings WHERE booking_id = ?',
-      [booking_id]
-    );
-    
-    connection.release();
-    
-    if (booking.length === 0) {
-      return res.status(404).json({ success: false, error: 'Booking not found' });
-    }
-    
-    res.json({ success: true, data: booking[0] });
-  } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -845,7 +825,6 @@ app.get('/api/stats', async (req, res) => {
     const [vacationCount] = await connection.execute('SELECT COUNT(*) as count FROM vacations');
     const [userCount] = await connection.execute('SELECT COUNT(*) as count FROM users');
     const [likeCount] = await connection.execute('SELECT COUNT(*) as count FROM likes');
-    const [bookingCount] = await connection.execute('SELECT COUNT(*) as count FROM bookings');
     const [reviewCount] = await connection.execute('SELECT COUNT(*) as count FROM reviews');
     
     connection.release();
@@ -856,7 +835,6 @@ app.get('/api/stats', async (req, res) => {
         vacations: vacationCount[0].count,
         users: userCount[0].count,
         likes: likeCount[0].count,
-        bookings: bookingCount[0].count,
         reviews: reviewCount[0].count
       }
     });
@@ -954,7 +932,6 @@ Available endpoints:
   ✓ DELETE /api/likes/:user_id/:vacation_id  - Remove like
   ✓ GET    /api/users/:user_id/likes         - User's likes
   ✓ POST   /api/users                        - Create user
-  ✓ POST   /api/bookings                     - Create booking
   ✓ POST   /api/reviews                      - Add review
     `);
   });

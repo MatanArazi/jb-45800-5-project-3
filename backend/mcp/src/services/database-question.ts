@@ -5,7 +5,7 @@ let pool: mysql.Pool | null = null;
 function getPool(): mysql.Pool {
   if (!pool) {
     pool = mysql.createPool({
-      host: 'localhost',
+      host: process.env.DB_HOST || 'localhost',
       user: process.env.DB_USER || 'vacation_user',
       password: process.env.DB_PASSWORD || 'userpassword',
       database: process.env.DB_NAME || 'vacation_db',

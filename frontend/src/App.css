@@ -110,6 +110,13 @@ body {
   max-width: 980px;
   padding: 24px;
 }
+.public-nav {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
 .auth-card-large, .signup-card-large {
   background: white;
   padding: 32px;
@@ -259,6 +266,16 @@ body {
 
 .admin-create-form input {
   min-width: 220px;
+}
+
+.about-meta {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #e4ebef;
+}
+
+.about-meta h3 {
+  margin-bottom: 8px;
 }
 
 .report-chart-wrap {
@@ -463,8 +480,7 @@ body {
   margin-top: auto;
 }
 
-.like-button,
-.book-button {
+.like-button {
   flex: 1;
   padding: 12px;
   border: none;
@@ -495,20 +511,6 @@ body {
   color: var(--primary-color);
   border-color: var(--primary-color);
   font-weight: 700;
-}
-
-.book-button {
-  background: linear-gradient(135deg, var(--secondary-color) 0%, #45b0aa 100%);
-  color: white;
-}
-
-.book-button:hover {
-  transform: scale(1.05);
-  box-shadow: 0 4px 12px rgba(78, 205, 196, 0.3);
-}
-
-.book-button:active {
-  transform: scale(0.98);
 }
 
 /* Footer */
@@ -543,8 +545,7 @@ body {
     flex-direction: column;
   }
 
-  .like-button,
-  .book-button {
+  .like-button {
     width: 100%;
   }
 

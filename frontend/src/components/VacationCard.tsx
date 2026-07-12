@@ -6,7 +6,6 @@ interface VacationCardProps {
   vacation: Vacation;
   userLikes: Set<number>;
   toggleLike: (vacationId: number) => void;
-  handleBooking: (vacationId: number) => void;
   formatPrice: (price: string | number) => string;
   isAdmin?: boolean;
   onEdit?: (vacation: Vacation) => void;
@@ -17,7 +16,6 @@ const VacationCard: React.FC<VacationCardProps> = ({
   vacation,
   userLikes,
   toggleLike,
-  handleBooking,
   formatPrice,
   isAdmin = false,
   onEdit,
@@ -57,21 +55,15 @@ const VacationCard: React.FC<VacationCardProps> = ({
         </div>
 
         <div className="actions">
-          <button
-            className={`like-button ${userLikes.has(vacation.vacation_id) ? 'liked' : ''}`}
-            onClick={() => toggleLike(vacation.vacation_id)}
-            title="Like this vacation"
-          >
-            ❤️ {vacation.total_likes}
-          </button>
-
-          <button
-            className="book-button"
-            onClick={() => handleBooking(vacation.vacation_id)}
-            title="Book this vacation"
-          >
-            📝 Book Now
-          </button>
+          {!isAdmin && (
+            <button
+              className={`like-button ${userLikes.has(vacation.vacation_id) ? 'liked' : ''}`}
+              onClick={() => toggleLike(vacation.vacation_id)}
+              title="Like this vacation"
+            >
+              ❤️ {vacation.total_likes}
+            </button>
+          )}
 
           {isAdmin && (
             <>

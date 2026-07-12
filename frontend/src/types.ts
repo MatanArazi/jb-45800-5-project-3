@@ -29,6 +29,5 @@ export interface Stats {
   vacations: number;
   users: number;
   likes: number;
-  bookings: number;
   reviews: number;
 }
