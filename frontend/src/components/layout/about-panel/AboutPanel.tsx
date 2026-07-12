@@ -4,6 +4,9 @@ interface AboutPanelProps {
   isPublic?: boolean;
 }
 
+const developerName = 'Matan Arazi';
+const developerCollege = 'John Bryce';
+
 const AboutPanel: React.FC<AboutPanelProps> = ({ isPublic = false }) => {
   return (
     <section className={`panel-section${isPublic ? ' about-panel-public' : ''}`}>
@@ -18,8 +21,8 @@ const AboutPanel: React.FC<AboutPanelProps> = ({ isPublic = false }) => {
       </p>
       <div className="about-meta">
         <h3>Developer Information</h3>
-        <p><strong>Name:</strong> Matan Arazi</p>
-        <p><strong>College:</strong> John Bryce</p>
+        <p><strong>Name:</strong> {developerName}</p>
+        <p><strong>College:</strong> {developerCollege}</p>
       </div>
     </section>
   );

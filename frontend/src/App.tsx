@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 import VacationsGrid from './components/VacationsGrid';
-import AboutPanel from './components/layout/about-panel/AboutPanel';
 import PublicNav from './components/layout/public-nav/PublicNav';
 import { Vacation, User, Stats } from './types';
 import authService from './services/auth';
@@ -28,6 +27,27 @@ interface McpResponse {
 interface ReportRow {
   destination: string;
   likes: number;
+}
+
+function renderAboutSection(isPublic: boolean = false): React.ReactElement {
+  return (
+    <section className={`panel-section${isPublic ? ' about-panel-public' : ''}`}>
+      <h2>About Vacation Paradise</h2>
+      <p>
+        Vacation Paradise is a role-based vacation management platform where registered users can browse destinations
+        and like vacations, while admins can manage vacation packages and monitor reports.
+      </p>
+      <p>
+        The system uses a React + TypeScript frontend, an Express + TypeScript backend, a MySQL database,
+        and Docker-ready infrastructure for full local deployment.
+      </p>
+      <div className="about-meta">
+        <h3>Developer Information</h3>
+        <p><strong>Name:</strong> Matan Arazi</p>
+        <p><strong>College:</strong> John Bryce</p>
+      </div>
+    </section>
+  );
 }
 
 function App() {
@@ -528,7 +548,7 @@ function App() {
             </div>
           )}
 
-          {publicView === 'about' && <AboutPanel isPublic />}
+          {publicView === 'about' && renderAboutSection(true)}
         </div>
       </div>
     );
@@ -749,7 +769,7 @@ function App() {
           </section>
         )}
 
-        {view === 'about' && <AboutPanel />}
+        {view === 'about' && renderAboutSection()}
 
         {view === 'home' && (loading && !error ? (
           <div className="loading"><p>Loading vacations...⏳</p></div>
