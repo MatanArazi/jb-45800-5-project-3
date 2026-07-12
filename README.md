@@ -29,4 +29,3 @@ The system supports role-based access (`admin` and `user`), authentication, pagi
 ## Admin Credentials (Seeded)
 - Email: `admin@vacations.local`
 - Password: `Admin1234`
-

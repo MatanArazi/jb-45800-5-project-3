@@ -1,5 +1,4 @@
 # Environment variables with sensitive data
-.env
 .env.local
 .env.*.local
 
